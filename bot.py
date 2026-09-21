@@ -46,23 +46,13 @@ logging.basicConfig(
 
 
 # =========================================================
-# ОБЫЧНЫЕ КНОПКИ
+# КЛИЕНТСКИЕ КНОПКИ
 # =========================================================
 
 def home():
     return M([
-        [
-            B(
-                "🍣 Оценить заказ",
-                callback_data="review",
-            )
-        ],
-        [
-            B(
-                "💬 Связаться с поддержкой",
-                url=SUPPORT,
-            )
-        ],
+        [B("🍣 Оценить заказ", callback_data="review")],
+        [B("💬 Связаться с поддержкой", url=SUPPORT)],
     ])
 
 
@@ -82,58 +72,23 @@ def stars():
 
 def reasons():
     return M([
-        [
-            B(
-                "🍣 Качество блюда",
-                callback_data="x_food",
-            )
-        ],
-        [
-            B(
-                "🚗 Доставка",
-                callback_data="x_delivery",
-            )
-        ],
-        [
-            B(
-                "📦 Ошибка в заказе",
-                callback_data="x_order",
-            )
-        ],
-        [
-            B(
-                "🙋 Обслуживание",
-                callback_data="x_service",
-            )
-        ],
-        [
-            B(
-                "💬 Другое",
-                callback_data="x_other",
-            )
-        ],
+        [B("🍣 Качество блюда", callback_data="x_food")],
+        [B("🚗 Доставка", callback_data="x_delivery")],
+        [B("📦 Ошибка в заказе", callback_data="x_order")],
+        [B("🙋 Обслуживание", callback_data="x_service")],
+        [B("💬 Другое", callback_data="x_other")],
     ])
 
 
 def finish():
     return M([
-        [
-            B(
-                "💬 Связаться с поддержкой",
-                url=SUPPORT,
-            )
-        ],
-        [
-            B(
-                "🔄 Оценить другой заказ",
-                callback_data="review",
-            )
-        ],
+        [B("💬 Связаться с поддержкой", url=SUPPORT)],
+        [B("🔄 Оценить другой заказ", callback_data="review")],
     ])
 
 
 # =========================================================
-# КНОПКИ ОБРАЩЕНИЯ ДЛЯ АДМИНА
+# КНОПКИ ОБРАЩЕНИЯ В ОСНОВНОЙ КАРТОЧКЕ
 # =========================================================
 
 def admin_new_buttons(user_id):
@@ -247,6 +202,96 @@ def back_admin():
     ])
 
 
+def ticket_list_keyboard(items, list_type):
+    rows = []
+
+    for item in reversed(items[-10:]):
+        ticket = item.get("ticket", "?")
+        order = item.get("order", "без номера")
+        status = item.get("status", "new")
+
+        icon = {
+            "new": "🔴",
+            "work": "🟡",
+            "closed": "✅",
+        }.get(status, "⚪")
+
+        label = f"{icon} {ticket} • {order}"
+
+        rows.append([
+            B(
+                label,
+                callback_data=(
+                    f"ticket:{ticket}:{list_type}"
+                ),
+            )
+        ])
+
+    rows.append([
+        B(
+            "⬅️ Назад в админ-панель",
+            callback_data="panel_home",
+        )
+    ])
+
+    return M(rows)
+
+
+def ticket_card_keyboard(
+    ticket,
+    user_id,
+    status,
+    back_to,
+):
+    rows = []
+
+    if status == "new":
+        rows.append([
+            B(
+                "🟡 Взять в работу",
+                callback_data=(
+                    f"ticket_work:{ticket}:{back_to}"
+                ),
+            )
+        ])
+
+    if status in ("new", "work", "closed"):
+        rows.append([
+            B(
+                "💬 Ответить клиенту",
+                callback_data=(
+                    f"ticket_reply:{ticket}:{back_to}"
+                ),
+            )
+        ])
+
+    if status in ("new", "work"):
+        rows.append([
+            B(
+                "✅ Закрыть обращение",
+                callback_data=(
+                    f"ticket_close:{ticket}:{back_to}"
+                ),
+            )
+        ])
+
+    rows.append([
+        B(
+            "⬅️ Назад к списку",
+            callback_data=f"backlist:{back_to}",
+        )
+    ])
+
+    rows.append([
+        B(
+            "🏠 Админ-панель",
+            callback_data="panel_home",
+        )
+    ])
+
+    return M(rows)
+
+
 # =========================================================
 # СЛУЖЕБНЫЕ ФУНКЦИИ
 # =========================================================
@@ -343,10 +388,31 @@ def status_name(status):
         "closed": "✅ РЕШЕНО",
     }
 
-    return names.get(
-        status,
-        status,
+    return names.get(status, status)
+
+
+def find_complaint_by_ticket(context, ticket):
+    complaints = context.bot_data.get(
+        "complaints",
+        {},
     )
+
+    for message_id, complaint in complaints.items():
+        if complaint.get("ticket") == ticket:
+            return message_id, complaint
+
+    return None, None
+
+
+def format_date(value):
+    if not value:
+        return "не указано"
+
+    try:
+        dt = datetime.fromisoformat(value)
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return value
 
 
 # =========================================================
@@ -369,14 +435,13 @@ async def start(
 
 
 # =========================================================
-# ОЦЕНКА ЗАКАЗА
+# КЛИЕНТСКАЯ ОЦЕНКА
 # =========================================================
 
 async def review(update, context):
     context.user_data.clear()
 
     query = update.callback_query
-
     await query.answer()
 
     await query.edit_message_text(
@@ -388,12 +453,9 @@ async def review(update, context):
 
 async def rating(update, context):
     query = update.callback_query
-
     await query.answer()
 
-    value = int(
-        query.data[1:]
-    )
+    value = int(query.data[1:])
 
     context.user_data["rating"] = value
 
@@ -454,7 +516,6 @@ async def rating(update, context):
 
 async def unknown(update, context):
     query = update.callback_query
-
     await query.answer()
 
     context.user_data["order"] = "не указан"
@@ -468,7 +529,6 @@ async def unknown(update, context):
 
 async def reason(update, context):
     query = update.callback_query
-
     await query.answer()
 
     reason_names = {
@@ -479,11 +539,9 @@ async def reason(update, context):
         "x_other": "Другое",
     }
 
-    context.user_data["reason"] = (
-        reason_names.get(
-            query.data,
-            "Другое",
-        )
+    context.user_data["reason"] = reason_names.get(
+        query.data,
+        "Другое",
     )
 
     context.user_data["stage"] = "comment"
@@ -502,7 +560,7 @@ async def reason(update, context):
 
 async def text_message(update, context):
 
-    # Если администратор сейчас отвечает клиенту
+    # Ответ администратора клиенту
     if is_admin(update):
         reply_state = context.chat_data.get(
             "admin_reply_to"
@@ -510,14 +568,23 @@ async def text_message(update, context):
 
         if reply_state:
             user_id = reply_state["user_id"]
+            ticket = reply_state.get(
+                "ticket",
+                "",
+            )
 
             text = update.message.text.strip()
 
             try:
+                title = "💬 Ответ Imperial Kitchen"
+
+                if ticket:
+                    title += f"\n🎫 Обращение {ticket}"
+
                 await context.bot.send_message(
                     chat_id=user_id,
                     text=(
-                        "💬 Ответ Imperial Kitchen\n\n"
+                        f"{title}\n\n"
                         f"{text}\n\n"
                         "Если вам нужно дополнить обращение, "
                         "вы можете написать нашей "
@@ -546,9 +613,7 @@ async def text_message(update, context):
 
             return
 
-    stage = context.user_data.get(
-        "stage"
-    )
+    stage = context.user_data.get("stage")
 
     if stage == "order":
         context.user_data["order"] = (
@@ -587,7 +652,7 @@ async def text_message(update, context):
 
 
 # =========================================================
-# КАРТОЧКА ОБРАЩЕНИЯ
+# СОЗДАНИЕ ОБРАЩЕНИЯ
 # =========================================================
 
 def admin_complaint_text(
@@ -642,9 +707,7 @@ async def finish_complaint(
         user_id,
     )
 
-    ticket = next_ticket_number(
-        context
-    )
+    ticket = next_ticket_number(context)
 
     complaint = {
         "ticket": ticket,
@@ -668,19 +731,17 @@ async def finish_complaint(
         "date": datetime.now().isoformat(),
     }
 
-    admin_message = (
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_complaint_text(
-                update,
-                context,
-                ticket,
-                previous,
-            ),
-            reply_markup=admin_new_buttons(
-                user_id
-            ),
-        )
+    admin_message = await context.bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=admin_complaint_text(
+            update,
+            context,
+            ticket,
+            previous,
+        ),
+        reply_markup=admin_new_buttons(
+            user_id
+        ),
     )
 
     complaint["admin_message_id"] = (
@@ -736,7 +797,6 @@ async def finish_complaint(
 
 async def no_photo(update, context):
     query = update.callback_query
-
     await query.answer()
 
     if context.user_data.get("stage") == "photo":
@@ -758,7 +818,7 @@ async def photo_message(update, context):
 
 
 # =========================================================
-# УПРАВЛЕНИЕ ОБРАЩЕНИЕМ
+# СТАРЫЕ КАРТОЧКИ — В РАБОТУ
 # =========================================================
 
 async def admin_work(update, context):
@@ -817,6 +877,10 @@ async def admin_work(update, context):
         "work",
     )
 
+
+# =========================================================
+# СТАРЫЕ КАРТОЧКИ — ЗАКРЫТЬ
+# =========================================================
 
 async def admin_close(update, context):
     query = update.callback_query
@@ -891,12 +955,15 @@ async def admin_close(update, context):
                 "становиться лучше ❤️"
             ),
         )
-
     except Exception:
         logging.exception(
             "Не удалось уведомить клиента"
         )
 
+
+# =========================================================
+# СТАРЫЕ КАРТОЧКИ — ОТВЕТИТЬ
+# =========================================================
 
 async def admin_reply(update, context):
     query = update.callback_query
@@ -914,10 +981,23 @@ async def admin_reply(update, context):
         query.data.split(":")[1]
     )
 
+    message_id = str(
+        query.message.message_id
+    )
+
+    complaint = context.bot_data.get(
+        "complaints",
+        {},
+    ).get(
+        message_id,
+        {},
+    )
+
     context.chat_data["admin_reply_to"] = {
         "user_id": user_id,
-        "admin_message_id": (
-            query.message.message_id
+        "ticket": complaint.get(
+            "ticket",
+            "",
         ),
     }
 
@@ -945,7 +1025,6 @@ async def cancel_reply(update, context):
         await update.message.reply_text(
             "❌ Отправка ответа отменена."
         )
-
     else:
         await update.message.reply_text(
             "Сейчас нет активного ответа клиенту."
@@ -1071,7 +1150,7 @@ async def stats(update, context):
 
 
 # =========================================================
-# ИСТОРИЯ КЛИЕНТА
+# ИСТОРИЯ
 # =========================================================
 
 async def history_command(update, context):
@@ -1110,24 +1189,13 @@ async def history_command(update, context):
         "",
     ]
 
-    for item in reversed(
-        history[-10:]
-    ):
+    for item in reversed(history[-10:]):
         lines.extend([
             f"🎫 {item.get('ticket', '?')}",
             f"⭐ {item.get('rating', '?')}/5",
-            (
-                f"🧾 Заказ: "
-                f"{item.get('order', 'не указан')}"
-            ),
-            (
-                f"⚠️ "
-                f"{item.get('reason', 'не указана')}"
-            ),
-            (
-                f"📌 "
-                f"{status_name(item.get('status', 'new'))}"
-            ),
+            f"🧾 Заказ: {item.get('order', 'не указан')}",
+            f"⚠️ {item.get('reason', 'не указана')}",
+            f"📌 {status_name(item.get('status', 'new'))}",
             "",
         ])
 
@@ -1137,7 +1205,7 @@ async def history_command(update, context):
 
 
 # =========================================================
-# АДМИН-ПАНЕЛЬ
+# ГЛАВНАЯ АДМИН-ПАНЕЛЬ
 # =========================================================
 
 def admin_dashboard_text(context):
@@ -1234,10 +1302,11 @@ async def panel_stats(update, context):
     )
 
 
-def complaints_text(
-    context,
-    wanted_status=None,
-):
+# =========================================================
+# СПИСКИ ОБРАЩЕНИЙ
+# =========================================================
+
+def get_complaints(context, wanted=None):
     complaints = context.bot_data.get(
         "complaints",
         {},
@@ -1251,48 +1320,66 @@ def complaints_text(
             "new",
         )
 
-        if wanted_status:
-            if status != wanted_status:
+        if wanted == "new":
+            if status != "new":
                 continue
-        else:
+
+        elif wanted == "work":
+            if status != "work":
+                continue
+
+        elif wanted == "active":
             if status == "closed":
                 continue
 
         items.append(item)
 
+    return items
+
+
+async def show_ticket_list(
+    query,
+    context,
+    list_type,
+):
+    if list_type == "new":
+        title = "🔴 НОВЫЕ ОБРАЩЕНИЯ"
+        items = get_complaints(
+            context,
+            "new",
+        )
+
+    elif list_type == "work":
+        title = "🟡 ОБРАЩЕНИЯ В РАБОТЕ"
+        items = get_complaints(
+            context,
+            "work",
+        )
+
+    else:
+        title = "📋 ВСЕ АКТИВНЫЕ ОБРАЩЕНИЯ"
+        items = get_complaints(
+            context,
+            "active",
+        )
+
     if not items:
-        return "👌 Здесь пока нет обращений."
+        await query.edit_message_text(
+            f"{title}\n\n"
+            "👌 Здесь пока нет обращений.",
+            reply_markup=back_admin(),
+        )
+        return
 
-    lines = []
-
-    for item in reversed(
-        items[-10:]
-    ):
-        lines.extend([
-            f"🎫 {item.get('ticket', '?')}",
-            status_name(
-                item.get(
-                    "status",
-                    "new",
-                )
-            ),
-            f"⭐ {item.get('rating', '?')}/5",
-            (
-                f"🧾 Заказ: "
-                f"{item.get('order', 'не указан')}"
-            ),
-            (
-                f"⚠️ "
-                f"{item.get('reason', 'не указана')}"
-            ),
-            (
-                f"💬 "
-                f"{item.get('comment', 'нет')}"
-            ),
-            "",
-        ])
-
-    return "\n".join(lines)
+    await query.edit_message_text(
+        f"{title}\n\n"
+        "Нажмите на обращение, "
+        "чтобы открыть его карточку:",
+        reply_markup=ticket_list_keyboard(
+            items,
+            list_type,
+        ),
+    )
 
 
 async def panel_new(update, context):
@@ -1307,13 +1394,10 @@ async def panel_new(update, context):
 
     await query.answer()
 
-    await query.edit_message_text(
-        "🔴 НОВЫЕ ОБРАЩЕНИЯ\n\n"
-        + complaints_text(
-            context,
-            "new",
-        ),
-        reply_markup=back_admin(),
+    await show_ticket_list(
+        query,
+        context,
+        "new",
     )
 
 
@@ -1329,13 +1413,10 @@ async def panel_work(update, context):
 
     await query.answer()
 
-    await query.edit_message_text(
-        "🟡 ОБРАЩЕНИЯ В РАБОТЕ\n\n"
-        + complaints_text(
-            context,
-            "work",
-        ),
-        reply_markup=back_admin(),
+    await show_ticket_list(
+        query,
+        context,
+        "work",
     )
 
 
@@ -1351,12 +1432,373 @@ async def panel_active(update, context):
 
     await query.answer()
 
-    await query.edit_message_text(
-        "📋 ВСЕ АКТИВНЫЕ ОБРАЩЕНИЯ\n\n"
-        + complaints_text(context),
-        reply_markup=back_admin(),
+    await show_ticket_list(
+        query,
+        context,
+        "active",
     )
 
+
+async def back_to_list(update, context):
+    query = update.callback_query
+
+    if not is_admin(update):
+        await query.answer(
+            "Нет доступа.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    list_type = query.data.split(
+        ":",
+        1,
+    )[1]
+
+    await show_ticket_list(
+        query,
+        context,
+        list_type,
+    )
+
+
+# =========================================================
+# ОТКРЫТИЕ ОБРАЩЕНИЯ ИЗ ПАНЕЛИ
+# =========================================================
+
+def ticket_card_text(complaint):
+    ticket = complaint.get(
+        "ticket",
+        "?",
+    )
+
+    status = complaint.get(
+        "status",
+        "new",
+    )
+
+    return (
+        "🎫 ОБРАЩЕНИЕ "
+        f"{ticket}\n\n"
+        f"📌 Статус: {status_name(status)}\n"
+        f"🕐 Создано: "
+        f"{format_date(complaint.get('date'))}\n\n"
+        f"⭐ Оценка: "
+        f"{complaint.get('rating', '?')}/5\n"
+        f"🧾 Заказ: "
+        f"{complaint.get('order', 'не указан')}\n"
+        f"⚠️ Причина: "
+        f"{complaint.get('reason', 'не указана')}\n"
+        f"🆔 User ID: "
+        f"{complaint.get('user_id', '?')}\n\n"
+        "💬 Комментарий:\n"
+        f"{complaint.get('comment', 'нет')}"
+    )
+
+
+async def open_ticket(update, context):
+    query = update.callback_query
+
+    if not is_admin(update):
+        await query.answer(
+            "Нет доступа.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    parts = query.data.split(
+        ":",
+        2,
+    )
+
+    ticket = parts[1]
+    back_to = parts[2]
+
+    _, complaint = find_complaint_by_ticket(
+        context,
+        ticket,
+    )
+
+    if not complaint:
+        await query.edit_message_text(
+            "❌ Обращение не найдено.",
+            reply_markup=back_admin(),
+        )
+        return
+
+    await query.edit_message_text(
+        ticket_card_text(
+            complaint
+        ),
+        reply_markup=ticket_card_keyboard(
+            ticket,
+            complaint.get("user_id"),
+            complaint.get(
+                "status",
+                "new",
+            ),
+            back_to,
+        ),
+    )
+
+
+# =========================================================
+# ВЗЯТЬ В РАБОТУ ИЗ ПАНЕЛИ
+# =========================================================
+
+async def ticket_work(update, context):
+    query = update.callback_query
+
+    if not is_admin(update):
+        await query.answer(
+            "Нет доступа.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    parts = query.data.split(
+        ":",
+        2,
+    )
+
+    ticket = parts[1]
+    back_to = parts[2]
+
+    _, complaint = find_complaint_by_ticket(
+        context,
+        ticket,
+    )
+
+    if not complaint:
+        await query.answer(
+            "Обращение не найдено.",
+            show_alert=True,
+        )
+        return
+
+    complaint["status"] = "work"
+
+    user_id = complaint.get(
+        "user_id"
+    )
+
+    update_history_status(
+        context,
+        user_id,
+        ticket,
+        "work",
+    )
+
+    # Обновляем также исходную карточку, если возможно
+    original_id = complaint.get(
+        "admin_message_id"
+    )
+
+    if original_id:
+        try:
+            old_text = (
+                "🚨 ОБРАЩЕНИЕ — IMPERIAL KITCHEN\n\n"
+                f"🎫 № обращения: {ticket}\n"
+                "📌 Статус: 🟡 В РАБОТЕ\n\n"
+                f"⭐ Оценка: {complaint.get('rating', '?')}/5\n"
+                f"🧾 Заказ: {complaint.get('order', 'не указан')}\n"
+                f"⚠️ Причина: {complaint.get('reason', 'не указана')}\n\n"
+                f"🆔 User ID: {user_id}\n\n"
+                "💬 Комментарий:\n"
+                f"{complaint.get('comment', 'нет')}"
+            )
+
+            await context.bot.edit_message_text(
+                chat_id=ADMIN_CHAT_ID,
+                message_id=original_id,
+                text=old_text,
+                reply_markup=admin_work_buttons(
+                    user_id
+                ),
+            )
+        except Exception:
+            logging.exception(
+                "Не удалось обновить исходную карточку"
+            )
+
+    await query.edit_message_text(
+        ticket_card_text(
+            complaint
+        ),
+        reply_markup=ticket_card_keyboard(
+            ticket,
+            user_id,
+            "work",
+            back_to,
+        ),
+    )
+
+
+# =========================================================
+# ЗАКРЫТЬ ИЗ ПАНЕЛИ
+# =========================================================
+
+async def ticket_close(update, context):
+    query = update.callback_query
+
+    if not is_admin(update):
+        await query.answer(
+            "Нет доступа.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    parts = query.data.split(
+        ":",
+        2,
+    )
+
+    ticket = parts[1]
+    back_to = parts[2]
+
+    _, complaint = find_complaint_by_ticket(
+        context,
+        ticket,
+    )
+
+    if not complaint:
+        await query.answer(
+            "Обращение не найдено.",
+            show_alert=True,
+        )
+        return
+
+    complaint["status"] = "closed"
+
+    user_id = complaint.get(
+        "user_id"
+    )
+
+    update_history_status(
+        context,
+        user_id,
+        ticket,
+        "closed",
+    )
+
+    original_id = complaint.get(
+        "admin_message_id"
+    )
+
+    if original_id:
+        try:
+            old_text = (
+                "🚨 ОБРАЩЕНИЕ — IMPERIAL KITCHEN\n\n"
+                f"🎫 № обращения: {ticket}\n"
+                "📌 Статус: ✅ РЕШЕНО\n\n"
+                f"⭐ Оценка: {complaint.get('rating', '?')}/5\n"
+                f"🧾 Заказ: {complaint.get('order', 'не указан')}\n"
+                f"⚠️ Причина: {complaint.get('reason', 'не указана')}\n\n"
+                f"🆔 User ID: {user_id}\n\n"
+                "💬 Комментарий:\n"
+                f"{complaint.get('comment', 'нет')}"
+            )
+
+            await context.bot.edit_message_text(
+                chat_id=ADMIN_CHAT_ID,
+                message_id=original_id,
+                text=old_text,
+                reply_markup=admin_closed_buttons(
+                    user_id
+                ),
+            )
+        except Exception:
+            logging.exception(
+                "Не удалось обновить исходную карточку"
+            )
+
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"✅ Обращение {ticket} отмечено "
+                "как решённое.\n\n"
+                "Спасибо, что помогаете Imperial Kitchen "
+                "становиться лучше ❤️"
+            ),
+        )
+    except Exception:
+        logging.exception(
+            "Не удалось уведомить клиента"
+        )
+
+    await query.edit_message_text(
+        ticket_card_text(
+            complaint
+        ),
+        reply_markup=ticket_card_keyboard(
+            ticket,
+            user_id,
+            "closed",
+            back_to,
+        ),
+    )
+
+
+# =========================================================
+# ОТВЕТИТЬ ИЗ ПАНЕЛИ
+# =========================================================
+
+async def ticket_reply(update, context):
+    query = update.callback_query
+
+    if not is_admin(update):
+        await query.answer(
+            "Нет доступа.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
+
+    parts = query.data.split(
+        ":",
+        2,
+    )
+
+    ticket = parts[1]
+
+    _, complaint = find_complaint_by_ticket(
+        context,
+        ticket,
+    )
+
+    if not complaint:
+        await query.answer(
+            "Обращение не найдено.",
+            show_alert=True,
+        )
+        return
+
+    context.chat_data["admin_reply_to"] = {
+        "user_id": complaint.get(
+            "user_id"
+        ),
+        "ticket": ticket,
+    }
+
+    await query.message.reply_text(
+        f"✍️ Ответ клиенту по обращению {ticket}\n\n"
+        "Напишите следующим сообщением текст ответа.\n\n"
+        "Для отмены отправьте /cancelreply"
+    )
+
+
+# =========================================================
+# ПОСЛЕДНИЕ ОЦЕНКИ
+# =========================================================
 
 async def panel_ratings(update, context):
     query = update.callback_query
@@ -1412,6 +1854,10 @@ async def panel_ratings(update, context):
     )
 
 
+# =========================================================
+# ИСТОРИЯ ИЗ ПАНЕЛИ
+# =========================================================
+
 async def panel_history(update, context):
     query = update.callback_query
 
@@ -1434,7 +1880,7 @@ async def panel_history(update, context):
 
 
 # =========================================================
-# ОТМЕНА ОПРОСА
+# ОТМЕНА
 # =========================================================
 
 async def cancel(update, context):
@@ -1465,17 +1911,11 @@ def main():
 
     # Команды
     application.add_handler(
-        CommandHandler(
-            "start",
-            start,
-        )
+        CommandHandler("start", start)
     )
 
     application.add_handler(
-        CommandHandler(
-            "cancel",
-            cancel,
-        )
+        CommandHandler("cancel", cancel)
     )
 
     application.add_handler(
@@ -1486,10 +1926,7 @@ def main():
     )
 
     application.add_handler(
-        CommandHandler(
-            "stats",
-            stats,
-        )
+        CommandHandler("stats", stats)
     )
 
     application.add_handler(
@@ -1506,7 +1943,7 @@ def main():
         )
     )
 
-    # Админ-панель
+    # Панель
     application.add_handler(
         CallbackQueryHandler(
             panel_home,
@@ -1556,7 +1993,43 @@ def main():
         )
     )
 
-    # Управление обращениями
+    # Открытие обращения
+    application.add_handler(
+        CallbackQueryHandler(
+            open_ticket,
+            pattern=r"^ticket:[^:]+:[^:]+$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            ticket_work,
+            pattern=r"^ticket_work:[^:]+:[^:]+$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            ticket_close,
+            pattern=r"^ticket_close:[^:]+:[^:]+$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            ticket_reply,
+            pattern=r"^ticket_reply:[^:]+:[^:]+$",
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            back_to_list,
+            pattern=r"^backlist:[^:]+$",
+        )
+    )
+
+    # Старые карточки обращений
     application.add_handler(
         CallbackQueryHandler(
             admin_work,
@@ -1578,7 +2051,7 @@ def main():
         )
     )
 
-    # Клиентский интерфейс
+    # Клиент
     application.add_handler(
         CallbackQueryHandler(
             review,
@@ -1614,7 +2087,6 @@ def main():
         )
     )
 
-    # Фото
     application.add_handler(
         MessageHandler(
             filters.PHOTO,
@@ -1622,7 +2094,6 @@ def main():
         )
     )
 
-    # Обычный текст
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
