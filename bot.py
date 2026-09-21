@@ -734,7 +734,312 @@ async def cancel(u, c):
         "Опрос отменён. Можно начать заново.",
         reply_markup=home(),
     )
+# =========================
+# АДМИН-ПАНЕЛЬ
+# =========================
 
+def admin_menu():
+    return M([
+        [
+            B("📊 Статистика", callback_data="panel_stats"),
+        ],
+        [
+            B("🔴 Новые обращения", callback_data="panel_new"),
+            B("🟡 В работе", callback_data="panel_work"),
+        ],
+        [
+            B("📋 Все активные", callback_data="panel_active"),
+        ],
+        [
+            B("⭐ Последние оценки", callback_data="panel_ratings"),
+        ],
+        [
+            B("📚 История клиента", callback_data="panel_history"),
+        ],
+        [
+            B("🔄 Обновить", callback_data="panel_home"),
+        ],
+    ])
+
+
+def back_admin():
+    return M([
+        [B("⬅️ Назад в админ-панель", callback_data="panel_home")]
+    ])
+
+
+def admin_dashboard_text(c):
+    ratings = c.bot_data.get("ratings", [])
+    complaints = c.bot_data.get("complaints", {})
+
+    new_count = sum(
+        1 for x in complaints.values()
+        if x.get("status") == "new"
+    )
+
+    work_count = sum(
+        1 for x in complaints.values()
+        if x.get("status") == "work"
+    )
+
+    closed_count = sum(
+        1 for x in complaints.values()
+        if x.get("status") == "closed"
+    )
+
+    if ratings:
+        average = sum(
+            int(x.get("rating", 0))
+            for x in ratings
+        ) / len(ratings)
+    else:
+        average = 0
+
+    return (
+        "👑 IMPERIAL KITCHEN — АДМИН\n\n"
+        "Добро пожаловать в панель управления.\n\n"
+        f"⭐ Средняя оценка: {average:.2f}/5\n"
+        f"📊 Всего оценок: {len(ratings)}\n\n"
+        f"🔴 Новые: {new_count}\n"
+        f"🟡 В работе: {work_count}\n"
+        f"✅ Решено: {closed_count}\n\n"
+        "Выберите нужный раздел:"
+    )
+
+
+async def admin_panel(u, c):
+    if not is_admin(u):
+        return
+
+    await u.message.reply_text(
+        admin_dashboard_text(c),
+        reply_markup=admin_menu(),
+    )
+
+
+async def panel_home(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    await q.edit_message_text(
+        admin_dashboard_text(c),
+        reply_markup=admin_menu(),
+    )
+
+
+async def panel_stats(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    ratings = c.bot_data.get("ratings", [])
+    complaints = c.bot_data.get("complaints", {})
+
+    total = len(ratings)
+
+    if total:
+        average = sum(
+            int(x.get("rating", 0))
+            for x in ratings
+        ) / total
+    else:
+        average = 0
+
+    counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
+    for item in ratings:
+        value = int(item.get("rating", 0))
+        if value in counts:
+            counts[value] += 1
+
+    new_count = sum(
+        1 for x in complaints.values()
+        if x.get("status") == "new"
+    )
+
+    work_count = sum(
+        1 for x in complaints.values()
+        if x.get("status") == "work"
+    )
+
+    closed_count = sum(
+        1 for x in complaints.values()
+        if x.get("status") == "closed"
+    )
+
+    text = (
+        "📊 СТАТИСТИКА\n\n"
+        f"⭐ Всего оценок: {total}\n"
+        f"📈 Средняя оценка: {average:.2f}/5\n\n"
+        "Распределение:\n"
+        f"⭐ 5 — {counts[5]}\n"
+        f"⭐ 4 — {counts[4]}\n"
+        f"⭐ 3 — {counts[3]}\n"
+        f"⭐ 2 — {counts[2]}\n"
+        f"⭐ 1 — {counts[1]}\n\n"
+        "🚨 Обращения:\n"
+        f"🔴 Новые: {new_count}\n"
+        f"🟡 В работе: {work_count}\n"
+        f"✅ Решено: {closed_count}\n"
+        f"📦 Всего: {len(complaints)}"
+    )
+
+    await q.edit_message_text(
+        text,
+        reply_markup=back_admin(),
+    )
+
+
+def complaints_text(c, wanted_status=None):
+    complaints = c.bot_data.get("complaints", {})
+
+    items = []
+
+    for item in complaints.values():
+        status = item.get("status", "new")
+
+        if wanted_status and status != wanted_status:
+            continue
+
+        if not wanted_status and status == "closed":
+            continue
+
+        items.append(item)
+
+    if not items:
+        return "👌 Здесь пока нет обращений."
+
+    items = items[-10:]
+
+    lines = []
+
+    status_names = {
+        "new": "🔴 НОВОЕ",
+        "work": "🟡 В РАБОТЕ",
+        "closed": "✅ РЕШЕНО",
+    }
+
+    for item in reversed(items):
+        lines.extend([
+            f"🎫 {item.get('ticket', '?')}",
+            f"{status_names.get(item.get('status'), '?')}",
+            f"⭐ {item.get('rating', '?')}/5",
+            f"🧾 Заказ: {item.get('order', 'не указан')}",
+            f"⚠️ {item.get('reason', 'не указана')}",
+            f"💬 {item.get('comment', 'нет')}",
+            "",
+        ])
+
+    return "\n".join(lines)
+
+
+async def panel_new(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    await q.edit_message_text(
+        "🔴 НОВЫЕ ОБРАЩЕНИЯ\n\n"
+        + complaints_text(c, "new"),
+        reply_markup=back_admin(),
+    )
+
+
+async def panel_work(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    await q.edit_message_text(
+        "🟡 ОБРАЩЕНИЯ В РАБОТЕ\n\n"
+        + complaints_text(c, "work"),
+        reply_markup=back_admin(),
+    )
+
+
+async def panel_active(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    await q.edit_message_text(
+        "📋 ВСЕ АКТИВНЫЕ ОБРАЩЕНИЯ\n\n"
+        + complaints_text(c),
+        reply_markup=back_admin(),
+    )
+
+
+async def panel_ratings(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    ratings = c.bot_data.get("ratings", [])
+
+    if not ratings:
+        text = "⭐ Оценок пока нет."
+    else:
+        lines = ["⭐ ПОСЛЕДНИЕ ОЦЕНКИ\n"]
+
+        for item in reversed(ratings[-10:]):
+            rating_value = item.get("rating", "?")
+            user_id = item.get("user_id", "?")
+
+            lines.append(
+                f"{'⭐' * int(rating_value)} — "
+                f"User ID: {user_id}"
+            )
+
+        text = "\n".join(lines)
+
+    await q.edit_message_text(
+        text,
+        reply_markup=back_admin(),
+    )
+
+
+async def panel_history(u, c):
+    q = u.callback_query
+
+    if not is_admin(u):
+        await q.answer("Нет доступа.", show_alert=True)
+        return
+
+    await q.answer()
+
+    await q.edit_message_text(
+        "📚 ИСТОРИЯ КЛИЕНТА\n\n"
+        "Чтобы посмотреть историю конкретного клиента, "
+        "отправьте команду:\n\n"
+        "/history USER_ID\n\n"
+        "User ID указан в каждой карточке обращения.",
+        reply_markup=back_admin(),
+    )
 
 # =========================
 # ЗАПУСК
@@ -757,8 +1062,56 @@ def main():
     a.add_handler(CommandHandler("cancelreply", cancelreply))
     a.add_handler(CommandHandler("stats", stats))
     a.add_handler(CommandHandler("history", history_command))
+    a.add_handler(CommandHandler("admin", admin_panel))
+    a.add_handler(
+    a.add_handler(
+        CallbackQueryHandler(
+            panel_home,
+            pattern="^panel_home$",
+        )
+    )
 
     a.add_handler(
+        CallbackQueryHandler(
+            panel_stats,
+            pattern="^panel_stats$",
+        )
+    )
+
+    a.add_handler(
+        CallbackQueryHandler(
+            panel_new,
+            pattern="^panel_new$",
+        )
+    )
+
+    a.add_handler(
+        CallbackQueryHandler(
+            panel_work,
+            pattern="^panel_work$",
+        )
+    )
+
+    a.add_handler(
+        CallbackQueryHandler(
+            panel_active,
+            pattern="^panel_active$",
+        )
+    )
+
+    a.add_handler(
+        CallbackQueryHandler(
+            panel_ratings,
+            pattern="^panel_ratings$",
+        )
+    )
+
+    a.add_handler(
+        CallbackQueryHandler(
+            panel_history,
+            pattern="^panel_history$",
+        )
+    )
         CallbackQueryHandler(
             admin_work,
             pattern=r"^admin_work:\d+$",
