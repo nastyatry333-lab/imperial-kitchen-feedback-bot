@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime
 
 from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
 from telegram.ext import (
@@ -31,7 +32,7 @@ logging.basicConfig(
 
 
 # =========================
-# КНОПКИ КЛИЕНТА
+# КНОПКИ
 # =========================
 
 def home():
@@ -72,10 +73,6 @@ def finish():
     ])
 
 
-# =========================
-# КНОПКИ АДМИНА
-# =========================
-
 def admin_new_buttons(user_id):
     return M([
         [B("🟡 Взять в работу", callback_data=f"admin_work:{user_id}")],
@@ -95,6 +92,40 @@ def admin_closed_buttons(user_id):
     return M([
         [B("💬 Ответить клиенту", callback_data=f"admin_reply:{user_id}")],
     ])
+
+
+# =========================
+# СЛУЖЕБНЫЕ ФУНКЦИИ
+# =========================
+
+def is_admin(u):
+    return u.effective_chat and u.effective_chat.id == ADMIN_CHAT_ID
+
+
+def next_ticket_number(c):
+    number = int(c.bot_data.get("ticket_counter", 0)) + 1
+    c.bot_data["ticket_counter"] = number
+    return f"IK-{number:04d}"
+
+
+def customer_complaint_count(c, user_id):
+    history = c.bot_data.get("customer_history", {})
+    return len(history.get(str(user_id), []))
+
+
+def save_rating(c, user_id, rating):
+    ratings = c.bot_data.setdefault("ratings", [])
+
+    ratings.append({
+        "user_id": user_id,
+        "rating": rating,
+        "date": datetime.now().isoformat(),
+    })
+
+
+def save_complaint_history(c, user_id, data):
+    history = c.bot_data.setdefault("customer_history", {})
+    history.setdefault(str(user_id), []).append(data)
 
 
 # =========================
@@ -136,6 +167,8 @@ async def rating(u, c):
 
     v = int(q.data[1:])
     c.user_data["rating"] = v
+
+    save_rating(c, u.effective_user.id, v)
 
     if v >= 4:
         c.user_data.clear()
@@ -203,19 +236,18 @@ async def reason(u, c):
     )
 
 
+# =========================
+# ТЕКСТОВЫЕ СООБЩЕНИЯ
+# =========================
+
 async def textmsg(u, c):
 
-    # ---------------------------------
-    # ЕСЛИ ПИШЕТ АДМИН
-    # ---------------------------------
-
-    if u.effective_chat.id == ADMIN_CHAT_ID:
+    # Ответ администратора клиенту
+    if is_admin(u):
         admin_state = c.chat_data.get("admin_reply_to")
 
         if admin_state:
             user_id = admin_state["user_id"]
-            admin_message_id = admin_state.get("admin_message_id")
-
             text = u.message.text.strip()
 
             try:
@@ -233,20 +265,8 @@ async def textmsg(u, c):
                     "✅ Ответ отправлен клиенту."
                 )
 
-                # Помечаем в карточке, что клиенту ответили
-                if admin_message_id:
-                    try:
-                        old_message = await c.bot.forward_message(
-                            chat_id=ADMIN_CHAT_ID,
-                            from_chat_id=ADMIN_CHAT_ID,
-                            message_id=admin_message_id,
-                        )
-                        await old_message.delete()
-                    except Exception:
-                        pass
-
-            except Exception as e:
-                logging.exception(e)
+            except Exception:
+                logging.exception("Ошибка отправки ответа клиенту")
 
                 await u.message.reply_text(
                     "❌ Не удалось отправить сообщение клиенту."
@@ -254,10 +274,6 @@ async def textmsg(u, c):
 
             c.chat_data.pop("admin_reply_to", None)
             return
-
-    # ---------------------------------
-    # ЕСЛИ ПИШЕТ КЛИЕНТ
-    # ---------------------------------
 
     s = c.user_data.get("stage")
 
@@ -284,60 +300,80 @@ async def textmsg(u, c):
 
 
 # =========================
-# ТЕКСТ ДЛЯ АДМИНА
+# СОЗДАНИЕ ОБРАЩЕНИЯ
 # =========================
 
-def admintext(u, c, status="🔴 НОВОЕ"):
+def admintext(u, c, ticket, previous):
     x = u.effective_user
     un = f"@{x.username}" if x.username else "не указан"
 
+    if previous == 0:
+        history_text = "Первое обращение"
+    else:
+        history_text = f"Ранее обращался: {previous} раз"
+
     return (
         "🚨 ОБРАЩЕНИЕ — IMPERIAL KITCHEN\n\n"
-        f"📌 Статус: {status}\n\n"
+        f"🎫 № обращения: {ticket}\n"
+        "📌 Статус: 🔴 НОВОЕ\n\n"
         f"⭐ Оценка: {c.user_data.get('rating', '?')}/5\n"
         f"🧾 Заказ: {c.user_data.get('order', 'не указан')}\n"
         f"⚠️ Причина: {c.user_data.get('reason', 'не указана')}\n\n"
         f"👤 Клиент: {x.full_name or 'не указано'}\n"
         f"📱 Telegram: {un}\n"
-        f"🆔 User ID: {x.id}\n\n"
+        f"🆔 User ID: {x.id}\n"
+        f"📚 История: {history_text}\n\n"
         "💬 Комментарий:\n"
         f"{c.user_data.get('comment', 'нет')}"
     )
 
 
-# =========================
-# ОТПРАВКА ОБРАЩЕНИЯ
-# =========================
-
 async def done(u, c, photo=None):
-
     user_id = u.effective_user.id
+
+    previous = customer_complaint_count(c, user_id)
+    ticket = next_ticket_number(c)
+
+    complaint_data = {
+        "ticket": ticket,
+        "user_id": user_id,
+        "rating": c.user_data.get("rating"),
+        "order": c.user_data.get("order", "не указан"),
+        "reason": c.user_data.get("reason", "не указана"),
+        "comment": c.user_data.get("comment", "нет"),
+        "status": "new",
+        "date": datetime.now().isoformat(),
+    }
 
     admin_message = await c.bot.send_message(
         ADMIN_CHAT_ID,
-        admintext(u, c),
+        admintext(u, c, ticket, previous),
         reply_markup=admin_new_buttons(user_id),
     )
 
-    # Сохраняем данные карточки
-    complaints = c.bot_data.setdefault("complaints", {})
+    complaint_data["admin_message_id"] = admin_message.message_id
 
-    complaints[str(admin_message.message_id)] = {
-        "user_id": user_id,
-        "status": "new",
-    }
+    complaints = c.bot_data.setdefault("complaints", {})
+    complaints[str(admin_message.message_id)] = complaint_data
+
+    save_complaint_history(
+        c,
+        user_id,
+        complaint_data.copy(),
+    )
 
     if photo:
         await c.bot.send_photo(
             ADMIN_CHAT_ID,
             photo=photo,
-            caption="📸 Фото к обращению",
+            caption=f"📸 Фото к обращению {ticket}",
         )
 
     c.user_data.clear()
 
     t = (
         "🙏 Спасибо, что рассказали нам о ситуации.\n\n"
+        f"Номер вашего обращения: {ticket}\n\n"
         "Ваше обращение передано руководству Imperial Kitchen. "
         "Мы обязательно разберёмся.\n\n"
         "Если вопрос срочный, вы можете сразу написать "
@@ -374,23 +410,41 @@ async def photo(u, c):
 
 
 # =========================
-# АДМИН — ВЗЯТЬ В РАБОТУ
+# ОБНОВЛЕНИЕ СТАТУСА В ИСТОРИИ
+# =========================
+
+def update_history_status(c, user_id, ticket, status):
+    history = c.bot_data.setdefault("customer_history", {})
+    items = history.get(str(user_id), [])
+
+    for item in reversed(items):
+        if item.get("ticket") == ticket:
+            item["status"] = status
+            break
+
+
+# =========================
+# АДМИН — В РАБОТУ
 # =========================
 
 async def admin_work(u, c):
     q = u.callback_query
 
-    if q.message.chat.id != ADMIN_CHAT_ID:
+    if not is_admin(u):
         await q.answer("Нет доступа.", show_alert=True)
         return
 
     await q.answer()
 
     user_id = int(q.data.split(":")[1])
+    message_id = str(q.message.message_id)
 
-    text = q.message.text
+    complaints = c.bot_data.setdefault("complaints", {})
+    complaint = complaints.get(message_id, {})
 
-    text = text.replace(
+    ticket = complaint.get("ticket", "неизвестно")
+
+    text = q.message.text.replace(
         "📌 Статус: 🔴 НОВОЕ",
         "📌 Статус: 🟡 В РАБОТЕ",
     )
@@ -400,10 +454,8 @@ async def admin_work(u, c):
         reply_markup=admin_work_buttons(user_id),
     )
 
-    complaints = c.bot_data.setdefault("complaints", {})
-
-    if str(q.message.message_id) in complaints:
-        complaints[str(q.message.message_id)]["status"] = "work"
+    complaint["status"] = "work"
+    update_history_status(c, user_id, ticket, "work")
 
 
 # =========================
@@ -413,13 +465,19 @@ async def admin_work(u, c):
 async def admin_close(u, c):
     q = u.callback_query
 
-    if q.message.chat.id != ADMIN_CHAT_ID:
+    if not is_admin(u):
         await q.answer("Нет доступа.", show_alert=True)
         return
 
     await q.answer()
 
     user_id = int(q.data.split(":")[1])
+    message_id = str(q.message.message_id)
+
+    complaints = c.bot_data.setdefault("complaints", {})
+    complaint = complaints.get(message_id, {})
+
+    ticket = complaint.get("ticket", "неизвестно")
 
     text = q.message.text
 
@@ -438,22 +496,20 @@ async def admin_close(u, c):
         reply_markup=admin_closed_buttons(user_id),
     )
 
-    complaints = c.bot_data.setdefault("complaints", {})
-
-    if str(q.message.message_id) in complaints:
-        complaints[str(q.message.message_id)]["status"] = "closed"
+    complaint["status"] = "closed"
+    update_history_status(c, user_id, ticket, "closed")
 
     try:
         await c.bot.send_message(
             chat_id=user_id,
             text=(
-                "✅ Ваше обращение в Imperial Kitchen отмечено "
-                "как решённое.\n\n"
-                "Спасибо, что помогаете нам становиться лучше ❤️"
+                f"✅ Обращение {ticket} отмечено как решённое.\n\n"
+                "Спасибо, что помогаете Imperial Kitchen "
+                "становиться лучше ❤️"
             ),
         )
-    except Exception as e:
-        logging.exception(e)
+    except Exception:
+        logging.exception("Ошибка уведомления клиента")
 
 
 # =========================
@@ -463,7 +519,7 @@ async def admin_close(u, c):
 async def admin_reply(u, c):
     q = u.callback_query
 
-    if q.message.chat.id != ADMIN_CHAT_ID:
+    if not is_admin(u):
         await q.answer("Нет доступа.", show_alert=True)
         return
 
@@ -484,8 +540,7 @@ async def admin_reply(u, c):
 
 
 async def cancelreply(u, c):
-
-    if u.effective_chat.id != ADMIN_CHAT_ID:
+    if not is_admin(u):
         return
 
     if c.chat_data.get("admin_reply_to"):
@@ -501,7 +556,175 @@ async def cancelreply(u, c):
 
 
 # =========================
-# ОТМЕНА ОПРОСА
+# СТАТИСТИКА
+# =========================
+
+async def stats(u, c):
+    if not is_admin(u):
+        return
+
+    ratings = c.bot_data.get("ratings", [])
+    complaints = c.bot_data.get("complaints", {})
+
+    total_ratings = len(ratings)
+
+    if total_ratings:
+        average = sum(
+            int(x.get("rating", 0))
+            for x in ratings
+        ) / total_ratings
+    else:
+        average = 0
+
+    stars_count = {
+        1: 0,
+        2: 0,
+        3: 0,
+        4: 0,
+        5: 0,
+    }
+
+    for item in ratings:
+        value = int(item.get("rating", 0))
+
+        if value in stars_count:
+            stars_count[value] += 1
+
+    new_count = 0
+    work_count = 0
+    closed_count = 0
+
+    reasons_count = {}
+
+    for item in complaints.values():
+        status = item.get("status")
+
+        if status == "new":
+            new_count += 1
+        elif status == "work":
+            work_count += 1
+        elif status == "closed":
+            closed_count += 1
+
+        reason_name = item.get("reason")
+
+        if reason_name:
+            reasons_count[reason_name] = (
+                reasons_count.get(reason_name, 0) + 1
+            )
+
+    if reasons_count:
+        reasons_sorted = sorted(
+            reasons_count.items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+        reasons_text = "\n".join(
+            f"• {name}: {count}"
+            for name, count in reasons_sorted
+        )
+    else:
+        reasons_text = "Пока нет данных"
+
+    text = (
+        "📊 СТАТИСТИКА — IMPERIAL KITCHEN\n\n"
+        f"⭐ Всего оценок: {total_ratings}\n"
+        f"📈 Средняя оценка: {average:.2f}/5\n\n"
+
+        "Распределение оценок:\n"
+        f"⭐ 5 — {stars_count[5]}\n"
+        f"⭐ 4 — {stars_count[4]}\n"
+        f"⭐ 3 — {stars_count[3]}\n"
+        f"⭐ 2 — {stars_count[2]}\n"
+        f"⭐ 1 — {stars_count[1]}\n\n"
+
+        "🚨 ОБРАЩЕНИЯ\n\n"
+        f"🔴 Новые: {new_count}\n"
+        f"🟡 В работе: {work_count}\n"
+        f"✅ Решено: {closed_count}\n"
+        f"📦 Всего обращений: {len(complaints)}\n\n"
+
+        "⚠️ Причины обращений:\n"
+        f"{reasons_text}"
+    )
+
+    await u.message.reply_text(text)
+
+
+# =========================
+# ИСТОРИЯ КЛИЕНТА
+# =========================
+
+async def history(u, c):
+    if not is_admin(u):
+        return
+
+    if not c.chat_data.get("history_user_id"):
+        await u.message.reply_text(
+            "Чтобы посмотреть историю клиента, отправьте:\n\n"
+            "/history USER_ID\n\n"
+            "Например:\n"
+            "/history 5284790085"
+        )
+        return
+
+
+async def history_command(u, c):
+    if not is_admin(u):
+        return
+
+    if not c.args:
+        await u.message.reply_text(
+            "Использование:\n/history USER_ID"
+        )
+        return
+
+    user_id = c.args[0]
+
+    customer_history = c.bot_data.get(
+        "customer_history",
+        {}
+    ).get(str(user_id), [])
+
+    if not customer_history:
+        await u.message.reply_text(
+            "По этому клиенту обращений пока нет."
+        )
+        return
+
+    lines = [
+        "📚 ИСТОРИЯ КЛИЕНТА",
+        f"🆔 User ID: {user_id}",
+        f"📦 Всего обращений: {len(customer_history)}",
+        "",
+    ]
+
+    for item in reversed(customer_history[-10:]):
+        status = item.get("status", "new")
+
+        status_text = {
+            "new": "🔴 Новое",
+            "work": "🟡 В работе",
+            "closed": "✅ Решено",
+        }.get(status, status)
+
+        lines.extend([
+            f"🎫 {item.get('ticket', '?')}",
+            f"⭐ {item.get('rating', '?')}/5",
+            f"🧾 Заказ: {item.get('order', 'не указан')}",
+            f"⚠️ {item.get('reason', 'не указана')}",
+            f"📌 {status_text}",
+            "",
+        ])
+
+    await u.message.reply_text(
+        "\n".join(lines)
+    )
+
+
+# =========================
+# ОТМЕНА
 # =========================
 
 async def cancel(u, c):
@@ -518,7 +741,6 @@ async def cancel(u, c):
 # =========================
 
 def main():
-
     persistence = PicklePersistence(
         filepath=PERSISTENCE_FILE
     )
@@ -533,6 +755,8 @@ def main():
     a.add_handler(CommandHandler("start", start))
     a.add_handler(CommandHandler("cancel", cancel))
     a.add_handler(CommandHandler("cancelreply", cancelreply))
+    a.add_handler(CommandHandler("stats", stats))
+    a.add_handler(CommandHandler("history", history_command))
 
     a.add_handler(
         CallbackQueryHandler(
