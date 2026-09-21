@@ -1,80 +1,69 @@
-import os, json, logging
-from pathlib import Path
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+import os, logging
+from telegram import InlineKeyboardButton as B, InlineKeyboardMarkup as M, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
-TOKEN=os.environ["BOT_TOKEN"]
-ADMIN_SECRET=os.environ.get("ADMIN_SECRET","Imperial95Owner")
-GIS_URL="https://go.2gis.com/qE6oV"
-SITE_URL="https://imperialkitchen.kz"
-ADMIN_FILE=Path("admin.json")
+TOKEN=os.environ["BOT_TOKEN"]; ADMIN_CHAT_ID=int(os.environ["ADMIN_CHAT_ID"])
+GIS="https://go.2gis.com/qE6oV"; SITE="https://imperialkitchen.kz"; SUPPORT="https://t.me/imperialkitchen95"
 logging.basicConfig(level=logging.INFO)
 
-def save_admin(chat_id):
-    ADMIN_FILE.write_text(json.dumps({"chat_id":chat_id}),encoding="utf-8")
+def home(): return M([[B("🍣 Оценить заказ",callback_data="review")],[B("💬 Связаться с поддержкой",url=SUPPORT)]])
+def stars(): return M([[B("⭐ 1",callback_data="r1"),B("⭐ 2",callback_data="r2"),B("⭐ 3",callback_data="r3")],[B("⭐ 4",callback_data="r4"),B("⭐ 5",callback_data="r5")]])
+def reasons(): return M([[B("🍣 Качество блюда",callback_data="x_food")],[B("🚗 Доставка",callback_data="x_delivery")],[B("📦 Ошибка в заказе",callback_data="x_order")],[B("🙋 Обслуживание",callback_data="x_service")],[B("💬 Другое",callback_data="x_other")]])
+def finish(): return M([[B("💬 Связаться с поддержкой",url=SUPPORT)],[B("🔄 Оценить другой заказ",callback_data="review")]])
 
-def get_admin():
-    x=os.environ.get("ADMIN_CHAT_ID")
-    if x:
-        try: return int(x)
-        except ValueError: pass
-    try: return int(json.loads(ADMIN_FILE.read_text(encoding="utf-8"))["chat_id"])
-    except Exception: return None
+async def start(u:Update,c:ContextTypes.DEFAULT_TYPE):
+ c.user_data.clear(); await u.message.reply_text("🍣 Imperial Kitchen\n\nСпасибо, что выбрали нас ❤️\n\nНам важно, чтобы каждый заказ радовал вас. Оцените свой заказ — это займёт меньше минуты.",reply_markup=home())
 
-def kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ 1",callback_data="rating_1"),InlineKeyboardButton("⭐ 2",callback_data="rating_2"),InlineKeyboardButton("⭐ 3",callback_data="rating_3")],
-        [InlineKeyboardButton("⭐ 4",callback_data="rating_4"),InlineKeyboardButton("⭐ 5",callback_data="rating_5")]
-    ])
+async def review(u,c):
+ c.user_data.clear(); q=u.callback_query; await q.answer(); await q.edit_message_text("Как вам заказ Imperial Kitchen?\n\nПоставьте, пожалуйста, оценку:",reply_markup=stars())
 
-async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text("🍣 Добро пожаловать в Imperial Kitchen!\n\nСпасибо, что выбрали нас ❤️\nНам очень важно узнать ваше мнение о заказе.\n\nПоставьте, пожалуйста, оценку:",reply_markup=kb())
+async def rating(u,c):
+ q=u.callback_query; await q.answer(); v=int(q.data[1:]); c.user_data["rating"]=v
+ if v>=4:
+  c.user_data.clear(); await q.edit_message_text("❤️ Спасибо за высокую оценку!\n\nНам будет очень приятно, если вы поделитесь своим впечатлением об Imperial Kitchen:",reply_markup=M([[B("⭐ Оставить отзыв в 2GIS",url=GIS)],[B("🌐 Оставить отзыв на сайте",url=SITE)],[B("🔄 Оценить другой заказ",callback_data="review")]])); return
+ c.user_data["stage"]="order"; await q.edit_message_text("😔 Спасибо, что сообщили нам.\n\nМы хотим разобраться в ситуации.\n\nНапишите, пожалуйста, номер вашего заказа.",reply_markup=M([[B("Не знаю номер заказа",callback_data="unknown")]]))
 
-async def admin(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if not context.args or context.args[0]!=ADMIN_SECRET:
-        await update.message.reply_text("⛔ Неверный код администратора."); return
-    save_admin(update.effective_chat.id)
-    await update.message.reply_text(f"✅ Администратор подключён.\n\nВаш Telegram chat ID: {update.effective_chat.id}\nТеперь негативные отзывы будут приходить сюда.")
+async def unknown(u,c):
+ q=u.callback_query; await q.answer(); c.user_data["order"]="не указан"; c.user_data["stage"]="reason"; await q.edit_message_text("Что именно пошло не так?",reply_markup=reasons())
 
-async def rating(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    q=update.callback_query; await q.answer()
-    v=int(q.data.split("_")[1]); context.user_data["rating"]=v
-    if v>=4:
-        context.user_data.clear()
-        links=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Оставить отзыв в 2GIS",url=GIS_URL)],
-            [InlineKeyboardButton("🌐 Оставить отзыв на сайте",url=SITE_URL)]
-        ])
-        await q.edit_message_text("❤️ Спасибо за высокую оценку!\n\nНам будет очень приятно, если вы поделитесь своим впечатлением об Imperial Kitchen. Выберите, где вам удобнее оставить отзыв:",reply_markup=links)
-    else:
-        context.user_data["waiting"]=True
-        await q.edit_message_text("😔 Спасибо, что сообщили нам.\n\nРасскажите, пожалуйста, что произошло или что нам нужно улучшить.\n\nНапишите сообщение ниже — оно будет передано руководству Imperial Kitchen.")
+async def reason(u,c):
+ q=u.callback_query; await q.answer()
+ d={"x_food":"Качество блюда","x_delivery":"Доставка","x_order":"Ошибка в заказе","x_service":"Обслуживание","x_other":"Другое"}
+ c.user_data["reason"]=d[q.data]; c.user_data["stage"]="comment"; await q.edit_message_text("Расскажите, пожалуйста, подробнее, что произошло.\n\nНапишите сообщение ниже. После этого можно будет приложить фотографию.")
 
-async def comment(update:Update,context:ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("waiting"): return
-    u=update.effective_user; v=context.user_data.get("rating","?")
-    username=f"@{u.username}" if u.username else "не указан"
-    text=f"🚨 НОВЫЙ ОТЗЫВ IMPERIAL KITCHEN\n\n⭐ Оценка: {v}/5\n👤 Клиент: {u.full_name}\n📱 Telegram: {username}\n🆔 User ID: {u.id}\n\n💬 Комментарий:\n{update.message.text}"
-    aid=get_admin()
-    if aid:
-        try:
-            await context.bot.send_message(aid,text)
-            await update.message.reply_text("🙏 Спасибо, что рассказали нам о ситуации.\n\nВаше сообщение передано руководству Imperial Kitchen. Мы обязательно обратим на него внимание.")
-        except Exception:
-            logging.exception("admin send failed")
-            await update.message.reply_text("Спасибо за обратную связь. Пожалуйста, также напишите нам: @imperialkitchen95")
-    else:
-        await update.message.reply_text("Спасибо за обратную связь. Пожалуйста, также напишите нам: @imperialkitchen95")
-    context.user_data.clear()
+async def textmsg(u,c):
+ s=c.user_data.get("stage")
+ if s=="order":
+  c.user_data["order"]=u.message.text.strip(); c.user_data["stage"]="reason"; await u.message.reply_text("Спасибо. Что именно пошло не так?",reply_markup=reasons())
+ elif s=="comment":
+  c.user_data["comment"]=u.message.text.strip(); c.user_data["stage"]="photo"; await u.message.reply_text("Если у вас есть фотография проблемы, отправьте её сюда.\n\nЕсли фотографии нет — нажмите кнопку ниже.",reply_markup=M([[B("➡️ Отправить без фото",callback_data="nophoto")]]))
+
+def admintext(u,c):
+ x=u.effective_user; un=f"@{x.username}" if x.username else "не указан"
+ return f"🚨 НОВОЕ ОБРАЩЕНИЕ — IMPERIAL KITCHEN\n\n⭐ Оценка: {c.user_data.get('rating','?')}/5\n🧾 Заказ: {c.user_data.get('order','не указан')}\n⚠️ Причина: {c.user_data.get('reason','не указана')}\n\n👤 Клиент: {x.full_name or 'не указано'}\n📱 Telegram: {un}\n🆔 User ID: {x.id}\n\n💬 Комментарий:\n{c.user_data.get('comment','нет')}"
+
+async def done(u,c,photo=None):
+ await c.bot.send_message(ADMIN_CHAT_ID,admintext(u,c))
+ if photo: await c.bot.send_photo(ADMIN_CHAT_ID,photo=photo,caption="📸 Фото к обращению")
+ c.user_data.clear(); t="🙏 Спасибо, что рассказали нам о ситуации.\n\nВаше обращение передано руководству Imperial Kitchen. Мы обязательно разберёмся.\n\nЕсли вопрос срочный, вы можете сразу написать нашей службе поддержки."
+ if u.callback_query: await u.callback_query.edit_message_text(t,reply_markup=finish())
+ else: await u.message.reply_text(t,reply_markup=finish())
+
+async def nophoto(u,c):
+ q=u.callback_query; await q.answer()
+ if c.user_data.get("stage")=="photo": await done(u,c)
+
+async def photo(u,c):
+ if c.user_data.get("stage")=="photo": await done(u,c,u.message.photo[-1].file_id)
+
+async def cancel(u,c):
+ c.user_data.clear(); await u.message.reply_text("Опрос отменён. Можно начать заново.",reply_markup=home())
 
 def main():
-    app=Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start",start))
-    app.add_handler(CommandHandler("admin",admin))
-    app.add_handler(CallbackQueryHandler(rating,pattern=r"^rating_[1-5]$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,comment))
-    app.run_polling(drop_pending_updates=True)
-
-if __name__=="__main__":
-    main()
+ a=Application.builder().token(TOKEN).build()
+ a.add_handler(CommandHandler("start",start)); a.add_handler(CommandHandler("cancel",cancel))
+ a.add_handler(CallbackQueryHandler(review,pattern="^review$")); a.add_handler(CallbackQueryHandler(rating,pattern="^r[1-5]$"))
+ a.add_handler(CallbackQueryHandler(unknown,pattern="^unknown$")); a.add_handler(CallbackQueryHandler(reason,pattern="^x_"))
+ a.add_handler(CallbackQueryHandler(nophoto,pattern="^nophoto$")); a.add_handler(MessageHandler(filters.PHOTO,photo))
+ a.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,textmsg)); a.run_polling(drop_pending_updates=True)
+if __name__=="__main__": main()
